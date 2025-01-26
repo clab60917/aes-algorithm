@@ -27,65 +27,106 @@ const uint8_t sboxtab[256] = {
 // Variable globale pour le round ciblé
 uint8_t targeted_round;
 
-// Table des constantes de round
+// Constantes de round (Rcon) utilisées dans la génération des clés
 const uint8_t rcon[10] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36};
 
+// Fonction utilitaire pour afficher l'état actuel de la matrice
+void printState(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
+    for(int i = 0; i < STATE_ROW_SIZE; i++) {
+        for(int j = 0; j < STATE_COL_SIZE; j++) {
+            printf("%02x ", state[i][j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+// Fonction principale d'encryption AES
 void AESEncrypt(uint8_t ciphertext[DATA_SIZE], uint8_t plaintext[DATA_SIZE], uint8_t key[DATA_SIZE]) {
     assert(ciphertext != NULL && plaintext != NULL && key != NULL);
 
-    uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE];
-    uint8_t roundkeys[ROUND_COUNT + 1][STATE_ROW_SIZE][STATE_COL_SIZE];
-    uint8_t roundkey[STATE_ROW_SIZE][STATE_COL_SIZE];
+    // Déclaration des matrices d'état et des clés
+    uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE];        // État courant
+    uint8_t roundkeys[ROUND_COUNT + 1][STATE_ROW_SIZE][STATE_COL_SIZE];  // Toutes les clés de round
+    uint8_t roundkey[STATE_ROW_SIZE][STATE_COL_SIZE];     // Clé du round courant
     
+    // Transformation du message et de la clé en matrices
     MessageToState(state, plaintext);
     MessageToState(roundkey, key);
+    printf("État initial:\n");
+    printState(state);
     
+    // Génération de toutes les clés de round
     KeyGen(roundkeys, roundkey);
-    
     GetRoundKey(roundkey, roundkeys, 0);
+    // Premier AddRoundKey avec la clé initiale
     AddRoundKey(state, roundkey);
+    printf("Après AddRoundKey initial:\n");
+    printState(state);
     
+    // Les 10 rounds de l'AES
     for (int round = 1; round <= ROUND_COUNT; round++) {
-        SubBytes(state);
-        ShiftRows(state);
+        printf("\n=== Round %d ===\n", round);
         
+        // 1. SubBytes : substitution non-linéaire
+        SubBytes(state);
+        printf("Après SubBytes:\n");
+        printState(state);
+        
+        // 2. ShiftRows : permutation des lignes
+        ShiftRows(state);
+        printf("Après ShiftRows:\n");
+        printState(state);
+        
+        // 3. MixColumns : mélange des colonnes (sauf au dernier round)
         if (round != ROUND_COUNT) {
             MixColumns(state);
+            printf("Après MixColumns:\n");
+            printState(state);
         }
         
+        // 4. AddRoundKey : XOR avec la clé de round
         GetRoundKey(roundkey, roundkeys, round);
         AddRoundKey(state, roundkey);
+        printf("Après AddRoundKey:\n");
+        printState(state);
     }
     
+    // Conversion de la matrice finale en message chiffré
     StateToMessage(ciphertext, state);
 }
 
+// XOR bit à bit entre l'état et la clé de round
 void AddRoundKey(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE], 
                 uint8_t roundkey[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     for (int i = 0; i < STATE_ROW_SIZE; i++) {
         for (int j = 0; j < STATE_COL_SIZE; j++) {
-            state[i][j] ^= roundkey[i][j];
+            state[i][j] ^= roundkey[i][j];  // XOR (^) entre chaque octet
         }
     }
 }
 
+// Substitution de chaque octet en utilisant la S-box
 void SubBytes(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     for (int i = 0; i < STATE_ROW_SIZE; i++) {
         for (int j = 0; j < STATE_COL_SIZE; j++) {
-            state[i][j] = sboxtab[state[i][j]];
+            state[i][j] = sboxtab[state[i][j]];  // Remplacement par la valeur dans la S-box
         }
     }
 }
 
+// Décalage cyclique des lignes vers la gauche
 void ShiftRows(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     uint8_t temp;
     
+    // Ligne 1 : décalage de 1 position
     temp = state[1][0];
     state[1][0] = state[1][1];
     state[1][1] = state[1][2];
     state[1][2] = state[1][3];
     state[1][3] = temp;
     
+    // Ligne 2 : décalage de 2 positions (swap)
     temp = state[2][0];
     state[2][0] = state[2][2];
     state[2][2] = temp;
@@ -93,6 +134,7 @@ void ShiftRows(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     state[2][1] = state[2][3];
     state[2][3] = temp;
     
+    // Ligne 3 : décalage de 3 positions
     temp = state[3][3];
     state[3][3] = state[3][2];
     state[3][2] = state[3][1];
@@ -100,94 +142,118 @@ void ShiftRows(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     state[3][0] = temp;
 }
 
+// Multiplication dans GF(2^8)
 uint8_t gmul(uint8_t a, uint8_t b) {
     uint8_t p = 0;
     uint8_t hi_bit_set;
     
     for (int i = 0; i < 8; i++) {
+        // Si le bit le plus à droite de b est 1, XOR avec a
         if (b & 1) {
             p ^= a;
         }
+        // Sauvegarde du bit de poids fort de a
         hi_bit_set = (a & 0x80);
+        // Décalage à gauche de a
         a <<= 1;
+        // Si le bit de poids fort était 1, on fait un XOR avec le polynôme irréductible
         if (hi_bit_set) {
-            a ^= 0x1B;
+            a ^= 0x1B;  // x^8 + x^4 + x^3 + x + 1
         }
+        // Décalage à droite de b
         b >>= 1;
     }
     return p;
 }
 
+// Mélange des colonnes de la matrice d'état
 void MixColumns(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     uint8_t column[4];
     
+    // Traitement de chaque colonne
     for (int j = 0; j < STATE_COL_SIZE; j++) {
+        // Copie de la colonne
         for (int i = 0; i < STATE_ROW_SIZE; i++) {
             column[i] = state[i][j];
         }
+        // Multiplication de la colonne par la matrice MixColumns
         MCMatrixColumnProduct(column);
+        // Mise à jour de la colonne dans l'état
         for (int i = 0; i < STATE_ROW_SIZE; i++) {
             state[i][j] = column[i];
         }
     }
 }
 
+// Multiplication d'une colonne par la matrice MixColumns
 void MCMatrixColumnProduct(uint8_t column[STATE_COL_SIZE]) {
     uint8_t temp[4];
+    // Sauvegarde de la colonne originale
     for (int i = 0; i < 4; i++) {
         temp[i] = column[i];
     }
     
+    // Multiplication matricielle dans GF(2^8)
     column[0] = gmul(0x02, temp[0]) ^ gmul(0x03, temp[1]) ^ temp[2] ^ temp[3];
     column[1] = temp[0] ^ gmul(0x02, temp[1]) ^ gmul(0x03, temp[2]) ^ temp[3];
     column[2] = temp[0] ^ temp[1] ^ gmul(0x02, temp[2]) ^ gmul(0x03, temp[3]);
     column[3] = gmul(0x03, temp[0]) ^ temp[1] ^ temp[2] ^ gmul(0x02, temp[3]);
 }
 
+// Conversion message -> matrice d'état (column-major order)
 void MessageToState(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE], uint8_t message[DATA_SIZE]) {
     for (int i = 0; i < STATE_ROW_SIZE; i++) {
         for (int j = 0; j < STATE_COL_SIZE; j++) {
-            state[i][j] = message[i + 4*j];
+            state[i][j] = message[i + 4*j];  // Remplissage par colonnes
         }
     }
 }
 
+// Conversion matrice d'état -> message (column-major order)
 void StateToMessage(uint8_t message[DATA_SIZE], uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     for (int i = 0; i < STATE_ROW_SIZE; i++) {
         for (int j = 0; j < STATE_COL_SIZE; j++) {
-            message[i + 4*j] = state[i][j];
+            message[i + 4*j] = state[i][j];  // Lecture par colonnes
         }
     }
 }
 
+// Génération de toutes les clés de round
 void KeyGen(uint8_t roundkeys[][STATE_ROW_SIZE][STATE_COL_SIZE], uint8_t master_key[STATE_ROW_SIZE][STATE_COL_SIZE]) {
+    // Copie de la clé maître comme première clé de round
     for (int i = 0; i < STATE_ROW_SIZE; i++) {
         for (int j = 0; j < STATE_COL_SIZE; j++) {
             roundkeys[0][i][j] = master_key[i][j];
         }
     }
     
+    // Génération des clés suivantes
     for (int round = 1; round <= ROUND_COUNT; round++) {
-        ColumnFill(roundkeys, round);
-        OtherColumnsFill(roundkeys, round);
+        ColumnFill(roundkeys, round);        // Génère la première colonne
+        OtherColumnsFill(roundkeys, round);  // Génère les autres colonnes
     }
 }
 
+// Génération de la première colonne d'une clé de round
 void ColumnFill(uint8_t roundkeys[][STATE_ROW_SIZE][STATE_COL_SIZE], int round) {
+    // Applique la fonction g (rotation + SubBytes + XOR avec Rcon)
     roundkeys[round][0][0] = sboxtab[roundkeys[round-1][1][3]] ^ roundkeys[round-1][0][0] ^ rcon[round-1];
     roundkeys[round][1][0] = sboxtab[roundkeys[round-1][2][3]] ^ roundkeys[round-1][1][0];
     roundkeys[round][2][0] = sboxtab[roundkeys[round-1][3][3]] ^ roundkeys[round-1][2][0];
     roundkeys[round][3][0] = sboxtab[roundkeys[round-1][0][3]] ^ roundkeys[round-1][3][0];
 }
 
+// Génération des colonnes 1-3 d'une clé de round
 void OtherColumnsFill(uint8_t roundkeys[][STATE_ROW_SIZE][STATE_COL_SIZE], int round) {
     for (int j = 1; j < STATE_COL_SIZE; j++) {
         for (int i = 0; i < STATE_ROW_SIZE; i++) {
+            // XOR entre la colonne précédente de la clé courante et la même colonne de la clé précédente
             roundkeys[round][i][j] = roundkeys[round][i][j-1] ^ roundkeys[round-1][i][j];
         }
     }
 }
 
+// Récupération d'une clé de round spécifique
 void GetRoundKey(uint8_t roundkey[STATE_ROW_SIZE][STATE_COL_SIZE],
                 uint8_t roundkeys[][STATE_ROW_SIZE][STATE_COL_SIZE],
                 int round) {
@@ -197,26 +263,29 @@ void GetRoundKey(uint8_t roundkey[STATE_ROW_SIZE][STATE_COL_SIZE],
         }
     }
 }
+
 int main() {
-    // Message à chiffrer (16 octets)
+    // Vecteur de test standard NIST pour AES-128
     uint8_t plaintext[16] = {0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d,
                             0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07, 0x34};
 
-    // Clé de 16 octets
     uint8_t key[16] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
                        0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
                        
     uint8_t ciphertext[16];
 
+    // Affichage du message original en hexadécimal
     printf("Message original: ");
     for(int i = 0; i < 16; i++) {
         printf("%02x ", plaintext[i]);
     }
-    printf("\n");
+    printf("\n\n");
 
+    // Chiffrement
     AESEncrypt(ciphertext, plaintext, key);
 
-    printf("Message chiffré: ");
+    // Affichage du message chiffré en hexadécimal
+    printf("\nMessage chiffré: ");
     for(int i = 0; i < 16; i++) {
         printf("%02x ", ciphertext[i]);
     }
