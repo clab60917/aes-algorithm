@@ -41,7 +41,7 @@ void printState(uint8_t state[STATE_ROW_SIZE][STATE_COL_SIZE]) {
     printf("\n");
 }
 
-// Fonction principale d'encryption AES
+// Fonction principale du chiffrement AES
 void AESEncrypt(uint8_t ciphertext[DATA_SIZE], uint8_t plaintext[DATA_SIZE], uint8_t key[DATA_SIZE]) {
     assert(ciphertext != NULL && plaintext != NULL && key != NULL);
 
